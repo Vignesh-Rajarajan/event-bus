@@ -10,7 +10,7 @@ type EventBusOnDisk struct {
 	file *os.File
 }
 
-var _ EventManager = (*EventBusOnDisk)(nil)
+//var _ EventManager = (*EventBusOnDisk)(nil)
 
 func NewEventBusOnDisk(filename string) (*EventBusOnDisk, error) {
 	file, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0755)

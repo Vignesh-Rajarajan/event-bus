@@ -41,16 +41,20 @@ func runTests() error {
 
 	err := exec.Command("go", "install", "-v", "github.com/Vignesh-Rajarajan/event-bus").Run()
 	if err != nil {
-		log.Fatalf("Error compiling project %v", err)
+		return fmt.Errorf("error compiling project %v", err)
 	}
 
 	port := rand.Int()%1000 + 8000
 
 	dbFilename := "/tmp/test_events.txt"
-	os.Remove(dbFilename)
+	if err = os.Remove(dbFilename); err != nil {
+		return err
+	}
 
 	cmd := exec.Command(goPath+"/bin/event-bus", "-filebased", "-filename", dbFilename, "-port", strconv.Itoa(port))
-	cmd.Start()
+	if err = cmd.Start(); err != nil {
+		return err
+	}
 	defer cmd.Process.Kill()
 
 	log.Printf("starting server on port %d", port)
@@ -68,16 +72,16 @@ func runTests() error {
 	c := client.NewClient(fmt.Sprintf("http://localhost:%d", port))
 	want, err := send(c)
 	if err != nil {
-		log.Fatalf("Send error %v", err)
+		return err
 	}
 
 	got, err := receive(c)
 	if err != nil {
-		log.Fatalf("Receieve error %v", err)
+		return fmt.Errorf("receieve error %v", err)
 	}
 
 	if strconv.FormatInt(want, 10) != strconv.FormatInt(got, 10) {
-		log.Fatalf("error : want %v got %v", want, got)
+		return fmt.Errorf("error : want %v got %v", want, got)
 	}
 	log.Printf("Success %d %d", want, got)
 	return nil

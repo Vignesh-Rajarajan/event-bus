@@ -3,13 +3,15 @@ package manager
 import (
 	"bytes"
 	"errors"
+	"github.com/Vignesh-Rajarajan/event-bus/chunk"
 	"io"
 )
 
 type EventManager interface {
-	Read(offset, maxSize uint64, w io.Writer) error
+	Read(chunk string, offset, maxSize uint64, w io.Writer) error
 	Write(body []byte) error
-	Ack() error
+	Ack(chunk string) error
+	ListChunks() ([]chunk.Chunk, error)
 }
 
 func getTillLastDelimiter(temp []byte) (truncated []byte, rest []byte, err error) {

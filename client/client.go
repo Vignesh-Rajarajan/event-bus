@@ -2,21 +2,26 @@ package client
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
+	"github.com/Vignesh-Rajarajan/event-bus/chunk"
 	"io"
 	"net/http"
 )
 
 type Client struct {
-	addr    string
-	httpCli http.Client
-	offset  uint64
+	addr      string
+	httpCli   http.Client
+	offset    uint64
+	currChunk chunk.Chunk
 }
 
+// NewClient creates a new client
 func NewClient(addr string) *Client {
 	return &Client{addr: addr, httpCli: http.Client{}}
 }
 
+// Send sends messages to the server
 func (c *Client) Send(messages []byte) error {
 	resp, err := c.httpCli.Post(fmt.Sprintf("%s/write", c.addr), "application/octet-stream", bytes.NewReader(messages))
 	if err != nil {
@@ -38,42 +43,54 @@ func (c *Client) Send(messages []byte) error {
 	return nil
 }
 
+// Receive receives messages from the server
 func (c *Client) Receive(temp []byte) ([]byte, error) {
 	if temp == nil {
 		temp = make([]byte, 1024*1024)
 	}
 
-	resp, err := c.httpCli.Get(fmt.Sprintf("%s/read?offset=%d&maxSize=%d", c.addr, c.offset, len(temp)))
+	if err := c.updateCurrChunk(); err != nil {
+		return nil, fmt.Errorf("error while updating current chunk %v", err)
+	}
+
+	resp, err := c.httpCli.Get(fmt.Sprintf("%s/read?offset=%d&maxSize=%d&chunk=%s", c.addr, c.offset, len(temp), c.currChunk.Name))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error while reading %v", err)
 	}
 	defer resp.Body.Close()
+
 	if resp.StatusCode != http.StatusOK {
 		var b bytes.Buffer
 		_, _ = io.Copy(&b, resp.Body)
-		return nil, fmt.Errorf("status code:: %d - error::%s ", resp.StatusCode, b.String())
+		return nil, fmt.Errorf("reading: status code:: %d - error::%s ", resp.StatusCode, b.String())
 	}
 
 	b := bytes.NewBuffer(temp[0:0])
 	_, err = io.Copy(b, resp.Body)
 
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error while copying resp %v", err)
 	}
 
 	if b.Len() == 0 {
-		if err := c.Ack(c.addr); err != nil {
-			return nil, err
+		if !c.currChunk.Complete {
+			return nil, io.EOF
 		}
-		return nil, io.EOF
+		if err := c.Ack(c.addr); err != nil {
+			return nil, fmt.Errorf("error while acking %v", err)
+		}
+		c.currChunk = chunk.Chunk{}
+		c.offset = 0
+		return c.Receive(temp)
 	}
 	c.offset += uint64(b.Len())
 	return b.Bytes(), nil
 
 }
 
+// Ack acks the current chunk
 func (c *Client) Ack(addr string) error {
-	resp, err := c.httpCli.Get(fmt.Sprintf("%s/ack", addr))
+	resp, err := c.httpCli.Get(fmt.Sprintf("%s/ack?chunk=%s", addr, c.currChunk.Name))
 	if err != nil {
 		return err
 	}
@@ -85,4 +102,47 @@ func (c *Client) Ack(addr string) error {
 	}
 	_, _ = io.Copy(io.Discard, resp.Body)
 	return nil
+}
+
+func (c *Client) updateCurrChunk() error {
+	if c.currChunk.Name != "" {
+		return nil
+	}
+	chunks, err := c.ListChunks()
+	if err != nil {
+		return fmt.Errorf("error while listing chunks %v", err)
+	}
+	if len(chunks) == 0 {
+		return io.EOF
+	}
+
+	//for _, ch := range chunks {
+	//	if ch.Complete {
+	//		c.currChunk = ch
+	//		return nil
+	//	}
+	//
+	//}
+	c.currChunk = chunks[0]
+	return nil
+}
+
+// ListChunks lists all the chunks
+func (c *Client) ListChunks() ([]chunk.Chunk, error) {
+	resp, err := c.httpCli.Get(fmt.Sprintf("%s/listChunks", c.addr))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		var b bytes.Buffer
+		_, _ = io.Copy(&b, resp.Body)
+		return nil, fmt.Errorf("status code:: %d - error::%s ", resp.StatusCode, b.String())
+	}
+
+	var chunks []chunk.Chunk
+	if err := json.NewDecoder(resp.Body).Decode(&chunks); err != nil {
+		return nil, err
+	}
+	return chunks, nil
 }
