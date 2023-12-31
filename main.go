@@ -29,7 +29,10 @@ func main() {
 		}
 		_ = fp.Close()
 		_ = os.Remove(fp.Name())
-		diskManager := manager.NewEventBusOnDisk(*dirname)
+		diskManager, err := manager.NewEventBusOnDisk(*dirname)
+		if err != nil {
+			log.Fatalf("error creating disk manager %v", err)
+		}
 		s = web.NewServer(diskManager, uint(*port))
 	} else {
 		s = web.NewServer(&manager.EventBusInMemory{}, uint(*port))

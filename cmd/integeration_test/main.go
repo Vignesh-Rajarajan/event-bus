@@ -37,7 +37,7 @@ func runTests() error {
 		goPath = build.Default.GOPATH
 	}
 
-	log.Printf("compiling project")
+	log.Default().Printf("compiling project")
 
 	err := exec.Command("go", "install", "-v", "github.com/Vignesh-Rajarajan/event-bus").Run()
 	if err != nil {
@@ -52,14 +52,16 @@ func runTests() error {
 	}
 	_ = os.Mkdir(dbDirname, 0777)
 
+	_ = os.WriteFile(dbDirname+"chunk1", []byte("12345\n"), 0666)
 	cmd := exec.Command(goPath+"/bin/event-bus", "-filebased", "-dirname", dbDirname, "-port", strconv.Itoa(port))
 	if err = cmd.Start(); err != nil {
 		return err
 	}
 	defer cmd.Process.Kill()
 
-	log.Printf("starting server on port %d", port)
+	log.Default().Printf("starting server on port %d", port)
 
+	// wait for server to start
 	for {
 		timeout := time.Millisecond * 100
 		conn, err := net.DialTimeout("tcp", net.JoinHostPort("localhost", fmt.Sprint(port)), timeout)
@@ -69,7 +71,7 @@ func runTests() error {
 		_ = conn.Close()
 		break
 	}
-	log.Printf("testing started")
+	log.Default().Printf("testing started")
 	c := client.NewClient(fmt.Sprintf("http://localhost:%d", port))
 	want, err := send(c)
 	if err != nil {
@@ -80,11 +82,11 @@ func runTests() error {
 	if err != nil {
 		return fmt.Errorf("receieve error %v", err)
 	}
-
+	want += 12345
 	if strconv.FormatInt(want, 10) != strconv.FormatInt(got, 10) {
-		return fmt.Errorf("error : want %v got %v", want, got)
+		return fmt.Errorf("error : want %v got %v delivered %1.f%%", want, got, float64(got)/float64(want)*100)
 	}
-	log.Printf("Success %d %d", want, got)
+	log.Default().Printf("Success %d %d", want, got)
 	return nil
 }
 
@@ -93,7 +95,7 @@ func send(c *client.Client) (sum int64, err error) {
 	var networkTime time.Duration
 	var sentBytes int64
 	defer func() {
-		log.Printf(sendFmt, networkTime, time.Since(start)-networkTime, float64(sentBytes)/1024/1024)
+		log.Default().Printf(sendFmt, networkTime, time.Since(start)-networkTime, float64(sentBytes)/1024/1024)
 	}()
 	buff := make([]byte, 0, bufferSize)
 

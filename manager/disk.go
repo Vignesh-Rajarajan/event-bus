@@ -6,10 +6,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"sync"
 )
 
 const maxOnDiskChunkSize = 20 * 1024 * 1024
+
+var chunkRegex = regexp.MustCompile("^chunk([0-9]+)$")
 
 type EventBusOnDisk struct {
 	dirname       string
@@ -22,13 +26,19 @@ type EventBusOnDisk struct {
 
 var _ EventManager = (*EventBusOnDisk)(nil)
 
-func NewEventBusOnDisk(dirname string) *EventBusOnDisk {
-	return &EventBusOnDisk{
+// NewEventBusOnDisk creates a new event bus on disk
+func NewEventBusOnDisk(dirname string) (*EventBusOnDisk, error) {
+	e := &EventBusOnDisk{
 		dirname:      dirname,
 		filePointers: make(map[string]*os.File),
 	}
+	if err := e.initLastChunkIdx(); err != nil {
+		return nil, err
+	}
+	return e, nil
 }
 
+// Write writes the message to the last chunk
 func (c *EventBusOnDisk) Write(msg []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -51,6 +61,7 @@ func (c *EventBusOnDisk) Write(msg []byte) error {
 	return nil
 }
 
+// Read reads the chunk from the offset and writes to the writer
 func (c *EventBusOnDisk) Read(chunk string, offset, maxSize uint64, w io.Writer) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -86,6 +97,7 @@ func (c *EventBusOnDisk) Read(chunk string, offset, maxSize uint64, w io.Writer)
 
 }
 
+// Ack purges the particular chunkID from the disk
 func (c *EventBusOnDisk) Ack(chunk string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -112,6 +124,7 @@ func (c *EventBusOnDisk) Ack(chunk string) error {
 	return nil
 }
 
+// ListChunks fetches all the chunks which are not acked yet
 func (c *EventBusOnDisk) ListChunks() ([]chunk.Chunk, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -137,5 +150,28 @@ func (c *EventBusOnDisk) getFilePointer(chunk string) (*os.File, error) {
 	}
 	c.filePointers[chunk] = fp
 	return fp, nil
+
+}
+
+func (c *EventBusOnDisk) initLastChunkIdx() error {
+	files, err := os.ReadDir(c.dirname)
+	if err != nil {
+		return fmt.Errorf("error while reading directory %s, err %v", c.dirname, err)
+	}
+	for _, file := range files {
+		res := chunkRegex.FindStringSubmatch(file.Name())
+		if len(res) == 0 {
+			continue
+		}
+		idx, err := strconv.Atoi(res[1])
+		if err != nil {
+			return fmt.Errorf("error while parsing chunk index %s, err %v", res[1], err)
+		}
+		if uint64(idx)+1 >= c.lastChunkIdx {
+			c.lastChunkIdx = uint64(idx) + 1
+		}
+
+	}
+	return nil
 
 }
