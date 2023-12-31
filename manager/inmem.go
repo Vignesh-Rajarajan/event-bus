@@ -7,7 +7,7 @@ import (
 	"sync"
 )
 
-const maxChunkSize = 10 * 1024 * 1024
+const maxInMemChunkSize = 10 * 1024 * 1024
 
 type EventBusInMemory struct {
 	mu            sync.RWMutex
@@ -23,7 +23,7 @@ func (c *EventBusInMemory) Write(msg []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.lastChunkName == "" || (c.lastChunkSize+uint64(len(msg)) > maxChunkSize) {
+	if c.lastChunkName == "" || (c.lastChunkSize+uint64(len(msg)) > maxInMemChunkSize) {
 		c.lastChunkName = fmt.Sprintf("chunk-%d", c.lastChunkIdx)
 		c.lastChunkIdx++
 		c.lastChunkSize = 0
@@ -50,7 +50,7 @@ func (c *EventBusInMemory) Read(chunk string, offset, maxSize uint64, w io.Write
 	}
 
 	if offset+maxSize >= maxOffset {
-		w.Write(buff[offset:])
+		_, _ = w.Write(buff[offset:])
 		return nil
 	}
 

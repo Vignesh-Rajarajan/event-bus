@@ -46,12 +46,13 @@ func runTests() error {
 
 	port := rand.Int()%1000 + 8000
 
-	dbFilename := "/tmp/test_events.txt"
-	if err = os.Remove(dbFilename); err != nil {
-		return err
+	dbDirname := "/tmp/events/"
+	if err = os.RemoveAll(dbDirname); err != nil {
+		log.Default().Println(fmt.Errorf("error removing file %q, %v", dbDirname, err))
 	}
+	_ = os.Mkdir(dbDirname, 0777)
 
-	cmd := exec.Command(goPath+"/bin/event-bus", "-filebased", "-filename", dbFilename, "-port", strconv.Itoa(port))
+	cmd := exec.Command(goPath+"/bin/event-bus", "-filebased", "-dirname", dbDirname, "-port", strconv.Itoa(port))
 	if err = cmd.Start(); err != nil {
 		return err
 	}
@@ -65,7 +66,7 @@ func runTests() error {
 		if err != nil {
 			continue
 		}
-		conn.Close()
+		_ = conn.Close()
 		break
 	}
 	log.Printf("testing started")
