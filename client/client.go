@@ -50,7 +50,7 @@ func (c *Client) Receive(temp []byte) ([]byte, error) {
 	}
 
 	if err := c.updateCurrChunk(); err != nil {
-		return nil, fmt.Errorf("error while updating current chunk %v", err)
+		return nil, fmt.Errorf("error while updating current chunk %v, err %w", c.currChunk.Name, err)
 	}
 
 	resp, err := c.httpCli.Get(fmt.Sprintf("%s/read?offset=%d&maxSize=%d&chunk=%s", c.addr, c.offset, len(temp), c.currChunk.Name))
@@ -73,6 +73,11 @@ func (c *Client) Receive(temp []byte) ([]byte, error) {
 	}
 
 	if b.Len() == 0 {
+		if !c.currChunk.Complete {
+			if err := c.updateCurrChunkCompleteStatus(); err != nil {
+				return nil, fmt.Errorf("error while updating current chunk complete status %v", err)
+			}
+		}
 		if !c.currChunk.Complete {
 			return nil, io.EOF
 		}
@@ -115,14 +120,6 @@ func (c *Client) updateCurrChunk() error {
 	if len(chunks) == 0 {
 		return io.EOF
 	}
-
-	//for _, ch := range chunks {
-	//	if ch.Complete {
-	//		c.currChunk = ch
-	//		return nil
-	//	}
-	//
-	//}
 	c.currChunk = chunks[0]
 	return nil
 }
@@ -145,4 +142,18 @@ func (c *Client) ListChunks() ([]chunk.Chunk, error) {
 		return nil, err
 	}
 	return chunks, nil
+}
+
+func (c *Client) updateCurrChunkCompleteStatus() error {
+	chunks, err := c.ListChunks()
+	if err != nil {
+		return fmt.Errorf("error while listing chunks %v", err)
+	}
+	for _, ch := range chunks {
+		if ch.Name == c.currChunk.Name {
+			c.currChunk = ch
+			return nil
+		}
+	}
+	return nil
 }

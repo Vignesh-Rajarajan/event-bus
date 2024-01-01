@@ -15,6 +15,7 @@ const maxOnDiskChunkSize = 20 * 1024 * 1024
 
 var chunkRegex = regexp.MustCompile("^chunk([0-9]+)$")
 
+// EventBusOnDisk is an implementation of EventManager which stores the events on disk
 type EventBusOnDisk struct {
 	dirname       string
 	mu            sync.RWMutex

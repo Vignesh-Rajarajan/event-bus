@@ -9,6 +9,7 @@ import (
 
 const maxInMemChunkSize = 10 * 1024 * 1024
 
+// EventBusInMemory is an implementation of EventManager which stores the events in memory
 type EventBusInMemory struct {
 	mu            sync.RWMutex
 	lastChunkName string
@@ -19,6 +20,7 @@ type EventBusInMemory struct {
 
 var _ EventManager = (*EventBusInMemory)(nil)
 
+// Write writes the message to the last chunk
 func (c *EventBusInMemory) Write(msg []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -36,6 +38,7 @@ func (c *EventBusInMemory) Write(msg []byte) error {
 	return nil
 }
 
+// Read reads the message from the chunk
 func (c *EventBusInMemory) Read(chunk string, offset, maxSize uint64, w io.Writer) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -66,6 +69,7 @@ func (c *EventBusInMemory) Read(chunk string, offset, maxSize uint64, w io.Write
 	return nil
 }
 
+// Ack acks the chunk and deletes it from the memory
 func (c *EventBusInMemory) Ack(chunk string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -80,6 +84,7 @@ func (c *EventBusInMemory) Ack(chunk string) error {
 	return nil
 }
 
+// ListChunks lists all the chunks
 func (c *EventBusInMemory) ListChunks() ([]chunk.Chunk, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
