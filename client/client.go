@@ -3,6 +3,7 @@ package client
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/Vignesh-Rajarajan/event-bus/chunk"
 	"io"
@@ -15,6 +16,8 @@ type Client struct {
 	offset    uint64
 	currChunk chunk.Chunk
 }
+
+var errRetry = errors.New("retry the request")
 
 // NewClient creates a new client
 func NewClient(addr string) *Client {
@@ -43,8 +46,20 @@ func (c *Client) Send(messages []byte) error {
 	return nil
 }
 
-// Receive receives messages from the server
 func (c *Client) Receive(temp []byte) ([]byte, error) {
+	if temp == nil {
+		temp = make([]byte, 1024*1024)
+	}
+	for {
+		res, err := c.receive(temp)
+		if !errors.Is(err, errRetry) {
+			return res, err
+		}
+	}
+}
+
+// Receive receives messages from the server
+func (c *Client) receive(temp []byte) ([]byte, error) {
 	if temp == nil {
 		temp = make([]byte, 1024*1024)
 	}
@@ -77,16 +92,22 @@ func (c *Client) Receive(temp []byte) ([]byte, error) {
 			if err := c.updateCurrChunkCompleteStatus(); err != nil {
 				return nil, fmt.Errorf("error while updating current chunk complete status %v", err)
 			}
+			if !c.currChunk.Complete {
+				if c.offset >= c.currChunk.Size {
+					return nil, io.EOF
+				}
+				return nil, errRetry
+			}
 		}
-		if !c.currChunk.Complete {
-			return nil, io.EOF
+		if c.offset < c.currChunk.Size {
+			return nil, errRetry
 		}
 		if err := c.Ack(c.addr); err != nil {
 			return nil, fmt.Errorf("error while acking %v", err)
 		}
 		c.currChunk = chunk.Chunk{}
 		c.offset = 0
-		return c.Receive(temp)
+		return nil, errRetry
 	}
 	c.offset += uint64(b.Len())
 	return b.Bytes(), nil
@@ -95,7 +116,7 @@ func (c *Client) Receive(temp []byte) ([]byte, error) {
 
 // Ack acks the current chunk
 func (c *Client) Ack(addr string) error {
-	resp, err := c.httpCli.Get(fmt.Sprintf("%s/ack?chunk=%s", addr, c.currChunk.Name))
+	resp, err := c.httpCli.Get(fmt.Sprintf("%s/ack?chunk=%s&size=%d", addr, c.currChunk.Name, c.offset))
 	if err != nil {
 		return err
 	}

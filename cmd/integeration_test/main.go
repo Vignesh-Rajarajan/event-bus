@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -52,13 +53,13 @@ func runTests() error {
 
 	port := rand.Int()%1000 + 8000
 
-	dbDirname := "/tmp/events/"
+	dbDirname := filepath.Join(os.TempDir(), "event-bus-test")
 	if err = os.RemoveAll(dbDirname); err != nil {
 		log.Default().Println(fmt.Errorf("error removing file %q, %v", dbDirname, err))
 	}
 	_ = os.Mkdir(dbDirname, 0777)
 
-	_ = os.WriteFile(dbDirname+"chunk1", []byte("12345\n"), 0666)
+	_ = os.WriteFile(filepath.Join(dbDirname, "chunk1"), []byte("12345\n"), 0666)
 	cmd := exec.Command(goPath+"/bin/event-bus", "-filebased", "-dirname", dbDirname, "-port", strconv.Itoa(port))
 	if err = cmd.Start(); err != nil {
 		return err

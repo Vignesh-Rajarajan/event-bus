@@ -74,7 +74,12 @@ func (s *Server) ackHandler(ctx *fasthttp.RequestCtx) {
 		ctx.Error("chunk cannot be empty", fasthttp.StatusBadRequest)
 		return
 	}
-	if err := s.manager.Ack(chunk); err != nil {
+	size, err := ctx.QueryArgs().GetUint("size")
+	if err != nil {
+		ctx.Error(fmt.Sprintf("bad `size` getParam: %v", err.Error()), fasthttp.StatusBadRequest)
+		return
+	}
+	if err := s.manager.Ack(chunk, int64(size)); err != nil {
 		ctx.Error(err.Error(), fasthttp.StatusInternalServerError)
 	}
 }

@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"errors"
 	"fmt"
 	"github.com/Vignesh-Rajarajan/event-bus/chunk"
 	"io"
@@ -99,7 +100,7 @@ func (c *EventBusOnDisk) Read(chunk string, offset, maxSize uint64, w io.Writer)
 }
 
 // Ack purges the particular chunkID from the disk
-func (c *EventBusOnDisk) Ack(chunk string) error {
+func (c *EventBusOnDisk) Ack(chunk string, size int64) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if chunk == c.lastChunk {
@@ -108,9 +109,12 @@ func (c *EventBusOnDisk) Ack(chunk string) error {
 	chunk = filepath.Clean(chunk)
 	chunkFile := filepath.Join(c.dirname, chunk)
 
-	_, err := os.Stat(chunkFile)
+	file, err := os.Stat(chunkFile)
 	if err != nil {
 		return fmt.Errorf("chunk %s not found, err %v", chunk, err)
+	}
+	if file.Size() > size {
+		return fmt.Errorf("file is not fully processed supplied size %d, actual size %d", size, file.Size())
 	}
 	if err := os.Remove(chunkFile); err != nil {
 		return fmt.Errorf("error while removing chunk %s, err %v", chunk, err)
@@ -135,7 +139,14 @@ func (c *EventBusOnDisk) ListChunks() ([]chunk.Chunk, error) {
 		return nil, err
 	}
 	for _, file := range files {
-		chunks = append(chunks, chunk.Chunk{Name: file.Name(), Complete: file.Name() != c.lastChunk})
+		file, err := file.Info()
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("error while reading file/dir info %v", err)
+		}
+		chunks = append(chunks, chunk.Chunk{Name: file.Name(), Complete: file.Name() != c.lastChunk, Size: uint64(file.Size())})
 	}
 	return chunks, nil
 }
@@ -147,7 +158,11 @@ func (c *EventBusOnDisk) getFilePointer(chunk string) (*os.File, error) {
 	}
 	fp, err := os.OpenFile(filepath.Join(c.dirname, chunk), os.O_APPEND|os.O_CREATE|os.O_RDWR, 0666)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error while opening file %s, err %v", chunk, err)
+	}
+	_, err = fp.Seek(0, io.SeekEnd)
+	if err != nil {
+		return nil, fmt.Errorf("error while seeking to end of file %s, err %v", chunk, err)
 	}
 	c.filePointers[chunk] = fp
 	return fp, nil
