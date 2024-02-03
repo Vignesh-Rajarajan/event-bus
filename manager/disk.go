@@ -51,7 +51,7 @@ func (c *EventBusOnDisk) Write(msg []byte) error {
 		c.lastChunkSize = 0
 	}
 
-	fp, err := c.getFilePointer(c.lastChunk)
+	fp, err := c.getFilePointer(c.lastChunk, true)
 	if err != nil {
 		return fmt.Errorf("error while getting file pointer %v for chunk %s while writing", err, c.lastChunk)
 	}
@@ -73,7 +73,7 @@ func (c *EventBusOnDisk) Read(chunk string, offset, maxSize uint64, w io.Writer)
 	if err != nil {
 		return fmt.Errorf("chunk %s not found, err %v", chunk, err)
 	}
-	fp, err := c.getFilePointer(chunk)
+	fp, err := c.getFilePointer(chunk, false)
 	if err != nil {
 		return fmt.Errorf("error while getting file pointer %v for chunk %s while reading", err, chunk)
 	}
@@ -100,7 +100,7 @@ func (c *EventBusOnDisk) Read(chunk string, offset, maxSize uint64, w io.Writer)
 }
 
 // Ack purges the particular chunkID from the disk
-func (c *EventBusOnDisk) Ack(chunk string, size int64) error {
+func (c *EventBusOnDisk) Ack(chunk string, size uint64) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if chunk == c.lastChunk {
@@ -113,7 +113,7 @@ func (c *EventBusOnDisk) Ack(chunk string, size int64) error {
 	if err != nil {
 		return fmt.Errorf("chunk %s not found, err %v", chunk, err)
 	}
-	if file.Size() > size {
+	if uint64(file.Size()) > size {
 		return fmt.Errorf("file is not fully processed supplied size %d, actual size %d", size, file.Size())
 	}
 	if err := os.Remove(chunkFile); err != nil {
@@ -151,12 +151,16 @@ func (c *EventBusOnDisk) ListChunks() ([]chunk.Chunk, error) {
 	return chunks, nil
 }
 
-func (c *EventBusOnDisk) getFilePointer(chunk string) (*os.File, error) {
+func (c *EventBusOnDisk) getFilePointer(chunk string, write bool) (*os.File, error) {
 	fp, ok := c.filePointers[chunk]
 	if ok {
 		return fp, nil
 	}
-	fp, err := os.OpenFile(filepath.Join(c.dirname, chunk), os.O_APPEND|os.O_CREATE|os.O_RDWR, 0666)
+	fl := os.O_RDONLY
+	if write {
+		fl = os.O_CREATE | os.O_RDWR | os.O_EXCL
+	}
+	fp, err := os.OpenFile(filepath.Join(c.dirname, chunk), fl, 0666)
 	if err != nil {
 		return nil, fmt.Errorf("error while opening file %s, err %v", chunk, err)
 	}
@@ -167,6 +171,16 @@ func (c *EventBusOnDisk) getFilePointer(chunk string) (*os.File, error) {
 	c.filePointers[chunk] = fp
 	return fp, nil
 
+}
+
+func (c *EventBusOnDisk) forgetFilePointer(chunk string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	fp, ok := c.filePointers[chunk]
+	if ok {
+		delete(c.filePointers, chunk)
+		_ = fp.Close()
+	}
 }
 
 func (c *EventBusOnDisk) initLastChunkIdx() error {

@@ -1,19 +1,19 @@
-package main
+package integration
 
 import (
 	"errors"
 	"fmt"
 	"github.com/Vignesh-Rajarajan/event-bus/client"
-	"go/build"
+	"github.com/phayes/freeport"
+	"github.com/stretchr/testify/assert"
 	"io"
 	"log"
-	"math/rand"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"testing"
 	"time"
 )
 
@@ -30,49 +30,48 @@ type testResult struct {
 	err error
 }
 
-func main() {
-	if err := runTests(); err != nil {
-		log.Fatalf("Error running tests %v", err)
-	}
-
+func TestSimpleClientServerConcurrently(t *testing.T) {
+	t.Parallel()
+	simpleClientAndServerTest(t, true)
 }
-func runTests() error {
+
+func TestSimpleClientServer(t *testing.T) {
+	simpleClientAndServerTest(t, false)
+}
+
+func simpleClientAndServerTest(t *testing.T, concurrent bool) {
+	t.Helper()
 	log.SetFlags(log.Flags() | log.Lmicroseconds)
 
-	goPath := os.Getenv("GOPATH")
-	if goPath == "" {
-		goPath = build.Default.GOPATH
-	}
+	port, err := freeport.GetFreePort()
+	assert.NoError(t, err)
+	dbPath, err := os.MkdirTemp(os.TempDir(), "event-bus-test")
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, os.RemoveAll(dbPath))
+	})
 
-	log.Default().Printf("compiling project")
+	_ = os.Mkdir(dbPath, 0777)
+	errChan := make(chan error, 1)
+	_ = os.WriteFile(filepath.Join(dbPath, "chunk1"), []byte("12345\n"), 0666)
 
-	err := exec.Command("go", "install", "-v", "github.com/Vignesh-Rajarajan/event-bus").Run()
-	if err != nil {
-		return fmt.Errorf("error compiling project %v", err)
-	}
-
-	port := rand.Int()%1000 + 8000
-
-	dbDirname := filepath.Join(os.TempDir(), "event-bus-test")
-	if err = os.RemoveAll(dbDirname); err != nil {
-		log.Default().Println(fmt.Errorf("error removing file %q, %v", dbDirname, err))
-	}
-	_ = os.Mkdir(dbDirname, 0777)
-
-	_ = os.WriteFile(filepath.Join(dbDirname, "chunk1"), []byte("12345\n"), 0666)
-	cmd := exec.Command(goPath+"/bin/event-bus", "-filebased", "-dirname", dbDirname, "-port", strconv.Itoa(port))
-	if err = cmd.Start(); err != nil {
-		return err
-	}
-	defer cmd.Process.Kill()
+	go func() {
+		errChan <- InitAndServer(dbPath, port)
+	}()
 
 	log.Default().Printf("starting server on port %d", port)
-
 	// wait for server to start
-	for {
-		timeout := time.Millisecond * 100
+	for i := 0; i <= 100; i++ {
+		select {
+		case err := <-errChan:
+			t.Fatalf("error while starting server %v", err)
+		default:
+
+		}
+		timeout := time.Millisecond * 50
 		conn, err := net.DialTimeout("tcp", net.JoinHostPort("localhost", fmt.Sprint(port)), timeout)
 		if err != nil {
+			time.Sleep(timeout)
 			continue
 		}
 		_ = conn.Close()
@@ -80,19 +79,29 @@ func runTests() error {
 	}
 	log.Default().Printf("testing started")
 	c := client.NewClient(fmt.Sprintf("http://localhost:%d", port))
-	want, got, err := sendAndReceive(c)
-	if err != nil {
-		return err
+	var want, got int64
+	if concurrent {
+		want, got, err = sendAndReceiveConcurrently(c)
+		if err != nil {
+			t.Fatalf("error while sending and receiving %v", err)
+		}
+	} else {
+		want, err = send(c)
+		assert.NoError(t, err)
+		sendFinishedCh := make(chan bool, 1)
+		sendFinishedCh <- true
+		got, err = receive(c, sendFinishedCh)
+		assert.NoError(t, err)
 	}
+
 	want += 12345
 	if want != got {
-		return fmt.Errorf("error : want %v got %v delivered %1.f%%", want, got, float64(got)/float64(want)*100)
+		t.Errorf("the expected sum %d is not equal to the received sum %d delivered %1.f%%", want, got, float64(got)/float64(want)*100)
 	}
 	log.Default().Printf("Success %d %d", want, got)
-	return nil
 }
 
-func sendAndReceive(c *client.Client) (want, got int64, err error) {
+func sendAndReceiveConcurrently(c *client.Client) (want, got int64, err error) {
 	wantChan := make(chan testResult, 1)
 	gotChan := make(chan testResult, 1)
 	sendCompleted := make(chan bool, 1)
@@ -110,11 +119,11 @@ func sendAndReceive(c *client.Client) (want, got int64, err error) {
 	}()
 	wantRes := <-wantChan
 	if wantRes.err != nil {
-		return 0, 0, fmt.Errorf("sendAndReceive error while sending %v", wantRes.err)
+		return 0, 0, fmt.Errorf("sendAndReceiveConcurrently error while sending %v", wantRes.err)
 	}
 	gotRes := <-gotChan
 	if gotRes.err != nil {
-		return 0, 0, fmt.Errorf("sendAndReceive error while receiving %v", gotRes.err)
+		return 0, 0, fmt.Errorf("sendAndReceiveConcurrently error while receiving %v", gotRes.err)
 	}
 	return wantRes.sum, gotRes.sum, nil
 }

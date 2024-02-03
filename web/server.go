@@ -79,7 +79,7 @@ func (s *Server) ackHandler(ctx *fasthttp.RequestCtx) {
 		ctx.Error(fmt.Sprintf("bad `size` getParam: %v", err.Error()), fasthttp.StatusBadRequest)
 		return
 	}
-	if err := s.manager.Ack(chunk, int64(size)); err != nil {
+	if err := s.manager.Ack(chunk, uint64(size)); err != nil {
 		ctx.Error(err.Error(), fasthttp.StatusInternalServerError)
 	}
 }

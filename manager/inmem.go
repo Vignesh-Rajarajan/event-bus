@@ -70,7 +70,7 @@ func (c *EventBusInMemory) Read(chunk string, offset, maxSize uint64, w io.Write
 }
 
 // Ack acks the chunk and deletes it from the memory
-func (c *EventBusInMemory) Ack(chunk string, size int64) error {
+func (c *EventBusInMemory) Ack(chunk string, size uint64) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	_, ok := c.buffs[chunk]

@@ -10,7 +10,7 @@ import (
 type EventManager interface {
 	Read(chunk string, offset, maxSize uint64, w io.Writer) error
 	Write(body []byte) error
-	Ack(chunk string, size int64) error
+	Ack(chunk string, size uint64) error
 	ListChunks() ([]chunk.Chunk, error)
 }
 
