@@ -13,6 +13,8 @@
           uses: actions/setup-go@v2
           with:
             go-version: 1.20
+        - name: Get etcg
+          run: 'export ETCD_VER="v3.5.12" && curl -L https://github.com/etcd-io/etcd/releases/download/${ETCD_VER}/etcd-${ETCD_VER}-linux-amd64.tar.gz -o etcd-${ETCD_VER}-linux-amd64.tar.gz && tar xzvf - -C ~/go/bin/ --strip-components=1'
         - name: Build
           run: go build -v ./...
         - name: Unit Test

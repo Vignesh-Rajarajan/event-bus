@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -42,22 +43,51 @@ func TestSimpleClientServer(t *testing.T) {
 func simpleClientAndServerTest(t *testing.T, concurrent bool) {
 	t.Helper()
 	log.SetFlags(log.Flags() | log.Lmicroseconds)
-
+	etcdPeerPort, err := freeport.GetFreePort()
+	assert.NoError(t, err)
+	etcdPort, err := freeport.GetFreePort()
+	assert.NoError(t, err)
 	port, err := freeport.GetFreePort()
 	assert.NoError(t, err)
 	dbPath, err := os.MkdirTemp(os.TempDir(), "event-bus-test")
 	assert.NoError(t, err)
+	etcdPath, err := os.MkdirTemp(os.TempDir(), "etcd")
+	assert.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, os.RemoveAll(dbPath))
 	})
+	t.Cleanup(func() {
+		assert.NoError(t, os.RemoveAll(etcdPath))
+	})
+
+	categoryPath := filepath.Join(dbPath, "numbers")
+	_ = os.Mkdir(categoryPath, 0777)
 
 	_ = os.Mkdir(dbPath, 0777)
 	errChan := make(chan error, 1)
-	_ = os.WriteFile(filepath.Join(dbPath, "chunk1"), []byte("12345\n"), 0666)
+	_ = os.WriteFile(filepath.Join(categoryPath, fmt.Sprintf("chunk%09d", 1)), []byte("12345\n"), 0666)
 
 	go func() {
-		errChan <- InitAndServer(dbPath, port)
+		errChan <- InitAndServer(fmt.Sprintf("http://localhost:%d/", etcdPort), dbPath, port)
 	}()
+
+	etcdArgs := []string{
+		"--data-dir", etcdPath,
+		"--listen-client-urls", fmt.Sprintf("http://localhost:%d", etcdPort),
+		"--advertise-client-urls", fmt.Sprintf("http://localhost:%d", etcdPort),
+		"--listen-peer-urls", fmt.Sprintf("http://localhost:%d", etcdPeerPort),
+	}
+	log.Printf("running etcd with etcdArgs %v", etcdArgs)
+
+	etcdCmd := exec.Command("etcd", etcdArgs...)
+	if err := etcdCmd.Start(); err != nil {
+		t.Fatalf("error while starting etcd %v", err)
+	}
+	t.Cleanup(func() {
+		if err := etcdCmd.Process.Kill(); err != nil {
+			log.Printf("error while killing etcd process %v", err)
+		}
+	})
 
 	log.Default().Printf("starting server on port %d", port)
 	// wait for server to start
@@ -144,7 +174,7 @@ func send(c *client.Client) (sum int64, err error) {
 
 		if len(buff) >= bufferSize {
 			networkStart := time.Now()
-			if err := c.Send(buff); err != nil {
+			if err := c.Send("numbers", buff); err != nil {
 				return 0, err
 			}
 			networkTime += time.Since(networkStart)
@@ -154,7 +184,7 @@ func send(c *client.Client) (sum int64, err error) {
 	}
 	if len(buff) > 0 {
 		networkStart := time.Now()
-		if err := c.Send(buff); err != nil {
+		if err := c.Send("numbers", buff); err != nil {
 			return 0, err
 		}
 		networkTime += time.Since(networkStart)
@@ -163,6 +193,8 @@ func send(c *client.Client) (sum int64, err error) {
 	}
 	return sum, nil
 }
+
+var randomErr = errors.New("temp error")
 
 func receive(c *client.Client, sendCompleted chan bool) (sum int64, err error) {
 	buff := make([]byte, bufferSize)
@@ -176,16 +208,35 @@ func receive(c *client.Client, sendCompleted chan bool) (sum int64, err error) {
 		return r == '\n'
 	}
 	sendFinished := false
+	loopCount := 0
 	for {
+		loopCount++
 		select {
 		case <-sendCompleted:
-			log.Default().Printf("Receive: send completed")
+			log.Default().Printf("Process: send completed")
 			sendFinished = true
 		default:
 
 		}
-		res, err := c.Receive(buff)
-		if errors.Is(err, io.EOF) {
+		err := c.Process("numbers", buff, func(res []byte) error {
+			if loopCount%10 == 0 {
+				return randomErr
+			}
+			start := time.Now()
+			ints := strings.Split(strings.TrimRightFunc(string(res), trimNewLine), "\n")
+			for _, str := range ints {
+				i, err := strconv.Atoi(str)
+				if err != nil {
+					return err
+				}
+				sum += int64(i)
+			}
+			parseTime += time.Since(start)
+			return nil
+		})
+		if errors.Is(err, randomErr) {
+			continue
+		} else if errors.Is(err, io.EOF) {
 			if sendFinished {
 				return sum, nil
 			}
@@ -196,18 +247,5 @@ func receive(c *client.Client, sendCompleted chan bool) (sum int64, err error) {
 			log.Default().Printf("Recieve: err")
 			return 0, err
 		}
-		start := time.Now()
-		ints := strings.Split(strings.TrimRightFunc(string(res), trimNewLine), "\n")
-		for _, str := range ints {
-			if str == "" {
-				continue
-			}
-			i, err := strconv.Atoi(str)
-			if err != nil {
-				return 0, err
-			}
-			sum += int64(i)
-		}
-		parseTime += time.Since(start)
 	}
 }

@@ -8,6 +8,8 @@ import (
 	"github.com/Vignesh-Rajarajan/event-bus/chunk"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 )
 
 type Client struct {
@@ -25,8 +27,10 @@ func NewClient(addr string) *Client {
 }
 
 // Send sends messages to the server
-func (c *Client) Send(messages []byte) error {
-	resp, err := c.httpCli.Post(fmt.Sprintf("%s/write", c.addr), "application/octet-stream", bytes.NewReader(messages))
+func (c *Client) Send(category string, messages []byte) error {
+	u := url.Values{}
+	u.Add("category", category)
+	resp, err := c.httpCli.Post(fmt.Sprintf("%s/write?%s", c.addr, u.Encode()), "application/octet-stream", bytes.NewReader(messages))
 	if err != nil {
 		return err
 	}
@@ -46,77 +50,85 @@ func (c *Client) Send(messages []byte) error {
 	return nil
 }
 
-func (c *Client) Receive(temp []byte) ([]byte, error) {
+// Process receives messages from the server
+func (c *Client) Process(category string, temp []byte, processFn func([]byte) error) error {
 	if temp == nil {
 		temp = make([]byte, 1024*1024)
 	}
 	for {
-		res, err := c.receive(temp)
+		err := c.process(category, temp, processFn)
 		if !errors.Is(err, errRetry) {
-			return res, err
+			return err
 		}
 	}
 }
 
-// Receive receives messages from the server
-func (c *Client) receive(temp []byte) ([]byte, error) {
-	if temp == nil {
-		temp = make([]byte, 1024*1024)
+func (c *Client) process(category string, temp []byte, processFn func([]byte) error) error {
+
+	if err := c.updateCurrChunk(category); err != nil {
+		return fmt.Errorf("error while updating current chunk %v, err %w", c.currChunk.Name, err)
 	}
 
-	if err := c.updateCurrChunk(); err != nil {
-		return nil, fmt.Errorf("error while updating current chunk %v, err %w", c.currChunk.Name, err)
-	}
-
-	resp, err := c.httpCli.Get(fmt.Sprintf("%s/read?offset=%d&maxSize=%d&chunk=%s", c.addr, c.offset, len(temp), c.currChunk.Name))
+	u := url.Values{}
+	u.Add("category", category)
+	u.Add("offset", strconv.Itoa(int(c.offset)))
+	u.Add("chunk", c.currChunk.Name)
+	u.Add("maxSize", strconv.Itoa(len(temp)))
+	resp, err := c.httpCli.Get(fmt.Sprintf("%s/read?%s", c.addr, u.Encode()))
 	if err != nil {
-		return nil, fmt.Errorf("error while reading %v", err)
+		return fmt.Errorf("error while reading %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		var b bytes.Buffer
 		_, _ = io.Copy(&b, resp.Body)
-		return nil, fmt.Errorf("reading: status code:: %d - error::%s ", resp.StatusCode, b.String())
+		return fmt.Errorf("process: status code:: %d - error::%s ", resp.StatusCode, b.String())
 	}
 
 	b := bytes.NewBuffer(temp[0:0])
 	_, err = io.Copy(b, resp.Body)
 
 	if err != nil {
-		return nil, fmt.Errorf("error while copying resp %v", err)
+		return fmt.Errorf("error while copying resp %v", err)
 	}
 
 	if b.Len() == 0 {
 		if !c.currChunk.Complete {
-			if err := c.updateCurrChunkCompleteStatus(); err != nil {
-				return nil, fmt.Errorf("error while updating current chunk complete status %v", err)
+			if err := c.updateCurrChunkCompleteStatus(category); err != nil {
+				return fmt.Errorf("error while updating current chunk complete status %v", err)
 			}
 			if !c.currChunk.Complete {
 				if c.offset >= c.currChunk.Size {
-					return nil, io.EOF
+					return io.EOF
 				}
-				return nil, errRetry
+				return errRetry
 			}
 		}
 		if c.offset < c.currChunk.Size {
-			return nil, errRetry
+			return errRetry
 		}
-		if err := c.Ack(c.addr); err != nil {
-			return nil, fmt.Errorf("error while acking %v", err)
+		if err := c.Ack(category, c.addr); err != nil {
+			return fmt.Errorf("error while acking %v", err)
 		}
 		c.currChunk = chunk.Chunk{}
 		c.offset = 0
-		return nil, errRetry
+		return errRetry
 	}
-	c.offset += uint64(b.Len())
-	return b.Bytes(), nil
-
+	err = processFn(b.Bytes())
+	if err == nil {
+		c.offset += uint64(b.Len())
+	}
+	return err
 }
 
 // Ack acks the current chunk
-func (c *Client) Ack(addr string) error {
-	resp, err := c.httpCli.Get(fmt.Sprintf("%s/ack?chunk=%s&size=%d", addr, c.currChunk.Name, c.offset))
+func (c *Client) Ack(category string, addr string) error {
+	u := url.Values{}
+	u.Add("category", category)
+	u.Add("chunk", c.currChunk.Name)
+	u.Add("size", strconv.Itoa(int(c.offset)))
+	resp, err := c.httpCli.Get(fmt.Sprintf("%s/ack?%s", addr, u.Encode()))
 	if err != nil {
 		return err
 	}
@@ -130,11 +142,11 @@ func (c *Client) Ack(addr string) error {
 	return nil
 }
 
-func (c *Client) updateCurrChunk() error {
+func (c *Client) updateCurrChunk(category string) error {
 	if c.currChunk.Name != "" {
 		return nil
 	}
-	chunks, err := c.ListChunks()
+	chunks, err := c.ListChunks(category)
 	if err != nil {
 		return fmt.Errorf("error while listing chunks %v", err)
 	}
@@ -146,8 +158,10 @@ func (c *Client) updateCurrChunk() error {
 }
 
 // ListChunks lists all the chunks
-func (c *Client) ListChunks() ([]chunk.Chunk, error) {
-	resp, err := c.httpCli.Get(fmt.Sprintf("%s/listChunks", c.addr))
+func (c *Client) ListChunks(category string) ([]chunk.Chunk, error) {
+	u := url.Values{}
+	u.Add("category", category)
+	resp, err := c.httpCli.Get(fmt.Sprintf("%s/listChunks?%s", c.addr, u.Encode()))
 	if err != nil {
 		return nil, err
 	}
@@ -165,8 +179,8 @@ func (c *Client) ListChunks() ([]chunk.Chunk, error) {
 	return chunks, nil
 }
 
-func (c *Client) updateCurrChunkCompleteStatus() error {
-	chunks, err := c.ListChunks()
+func (c *Client) updateCurrChunkCompleteStatus(category string) error {
+	chunks, err := c.ListChunks(category)
 	if err != nil {
 		return fmt.Errorf("error while listing chunks %v", err)
 	}
