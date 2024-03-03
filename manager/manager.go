@@ -2,6 +2,7 @@ package manager
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"github.com/Vignesh-Rajarajan/event-bus/chunk"
 	"io"
@@ -9,7 +10,7 @@ import (
 
 type EventManager interface {
 	Read(chunk string, offset, maxSize uint64, w io.Writer) error
-	Write(body []byte) error
+	Write(ctx context.Context, body []byte) error
 	Ack(chunk string, size uint64) error
 	ListChunks() ([]chunk.Chunk, error)
 }

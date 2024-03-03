@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/Vignesh-Rajarajan/event-bus/manager"
+	"github.com/Vignesh-Rajarajan/event-bus/replication"
 	"github.com/valyala/fasthttp"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"log"
@@ -14,20 +15,30 @@ import (
 )
 
 type Server struct {
-	etcd     clientv3.KV
-	dirname  string
-	m        sync.Mutex
-	storages map[string]manager.EventManager
-	port     uint
-	logger   *log.Logger
+	etcd               *clientv3.Client
+	instanceName       string
+	dirname            string
+	listenAddr         string
+	replicationStorage *replication.Storage
+	m                  sync.Mutex
+	storages           map[string]manager.EventManager
+	logger             *log.Logger
 }
 
-func NewServer(etcd clientv3.KV, dirname string, port uint) *Server {
-	return &Server{etcd: etcd, dirname: dirname, port: port, logger: log.Default(), storages: make(map[string]manager.EventManager)}
+func NewServer(etcd *clientv3.Client, instanceName, dirname, listenerAddr string, replicationStorage *replication.Storage) *Server {
+	return &Server{
+		etcd:               etcd,
+		dirname:            dirname,
+		instanceName:       instanceName,
+		listenAddr:         listenerAddr,
+		logger:             log.Default(),
+		storages:           make(map[string]manager.EventManager),
+		replicationStorage: replicationStorage,
+	}
 }
 
 func (s *Server) Start() error {
-	return fasthttp.ListenAndServe(fmt.Sprintf(":%d", s.port), s.handleRequest)
+	return fasthttp.ListenAndServe(s.listenAddr, s.handleRequest)
 }
 
 func isValidCategory(category string) bool {
@@ -58,7 +69,7 @@ func (s *Server) getStorage(category string) (manager.EventManager, error) {
 	if err := os.MkdirAll(dir, 0777); err != nil {
 		return nil, fmt.Errorf("error creating directory %s: %v", dir, err)
 	}
-	storage, err := manager.NewEventBusOnDisk(dir)
+	storage, err := manager.NewEventBusOnDisk(dir, category, s.instanceName, s.replicationStorage)
 	if err != nil {
 		return nil, fmt.Errorf("error creating storage: %v", err)
 	}
@@ -93,7 +104,7 @@ func (s *Server) handleWrite(ctx *fasthttp.RequestCtx) {
 		ctx.Error(err.Error(), fasthttp.StatusInternalServerError)
 		return
 	}
-	if err := storage.Write(ctx.PostBody()); err != nil {
+	if err := storage.Write(ctx, ctx.PostBody()); err != nil {
 		ctx.Error(err.Error(), fasthttp.StatusInternalServerError)
 	}
 }

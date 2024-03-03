@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"github.com/Vignesh-Rajarajan/event-bus/chunk"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -16,23 +18,33 @@ const maxOnDiskChunkSize = 20 * 1024 * 1024
 
 var chunkRegex = regexp.MustCompile("^chunk([0-9]+)$")
 
+type StorageHooks interface {
+	Init(ctx context.Context, category, fileName string) error
+}
+
 // EventBusOnDisk is an implementation of EventManager which stores the events on disk
 type EventBusOnDisk struct {
-	dirname       string
-	mu            sync.RWMutex
-	lastChunk     string
-	lastChunkSize uint64
-	lastChunkIdx  uint64
-	filePointers  map[string]*os.File
+	dirname            string
+	category           string
+	instanceName       string
+	replicationStorage StorageHooks
+	mu                 sync.RWMutex
+	lastChunk          string
+	lastChunkSize      uint64
+	lastChunkIdx       uint64
+	filePointers       map[string]*os.File
 }
 
 var _ EventManager = (*EventBusOnDisk)(nil)
 
 // NewEventBusOnDisk creates a new event bus on disk
-func NewEventBusOnDisk(dirname string) (*EventBusOnDisk, error) {
+func NewEventBusOnDisk(dirname, category, instanceName string, replicationStorage StorageHooks) (*EventBusOnDisk, error) {
 	e := &EventBusOnDisk{
-		dirname:      dirname,
-		filePointers: make(map[string]*os.File),
+		dirname:            dirname,
+		category:           category,
+		instanceName:       instanceName,
+		replicationStorage: replicationStorage,
+		filePointers:       make(map[string]*os.File),
 	}
 	if err := e.initLastChunkIdx(); err != nil {
 		return nil, err
@@ -41,14 +53,18 @@ func NewEventBusOnDisk(dirname string) (*EventBusOnDisk, error) {
 }
 
 // Write writes the message to the last chunk
-func (c *EventBusOnDisk) Write(msg []byte) error {
+func (c *EventBusOnDisk) Write(ctx context.Context, msg []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if c.lastChunk == "" || (c.lastChunkSize+uint64(len(msg)) > maxOnDiskChunkSize) {
-		c.lastChunk = fmt.Sprintf("chunk%d", c.lastChunkIdx)
+		c.lastChunk = fmt.Sprintf("%s-chunk%09d", c.instanceName, c.lastChunkIdx)
 		c.lastChunkIdx++
 		c.lastChunkSize = 0
+
+		if err := c.replicationStorage.Init(ctx, c.category, c.lastChunk); err != nil {
+			return fmt.Errorf("error before creating chunk %s, err %v", c.lastChunk, err)
+		}
 	}
 
 	fp, err := c.getFilePointer(c.lastChunk, true)
@@ -185,11 +201,15 @@ func (c *EventBusOnDisk) forgetFilePointer(chunk string) {
 
 func (c *EventBusOnDisk) initLastChunkIdx() error {
 	files, err := os.ReadDir(c.dirname)
+	prefix := c.instanceName + "-"
 	if err != nil {
 		return fmt.Errorf("error while reading directory %s, err %v", c.dirname, err)
 	}
 	for _, file := range files {
-		res := chunkRegex.FindStringSubmatch(file.Name())
+		if !strings.HasPrefix(file.Name(), prefix) {
+			continue
+		}
+		res := chunkRegex.FindStringSubmatch(strings.TrimPrefix(file.Name(), prefix))
 		if len(res) == 0 {
 			continue
 		}

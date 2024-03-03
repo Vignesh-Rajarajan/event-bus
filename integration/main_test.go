@@ -64,12 +64,7 @@ func simpleClientAndServerTest(t *testing.T, concurrent bool) {
 	_ = os.Mkdir(categoryPath, 0777)
 
 	_ = os.Mkdir(dbPath, 0777)
-	errChan := make(chan error, 1)
-	_ = os.WriteFile(filepath.Join(categoryPath, fmt.Sprintf("chunk%09d", 1)), []byte("12345\n"), 0666)
-
-	go func() {
-		errChan <- InitAndServer(fmt.Sprintf("http://localhost:%d/", etcdPort), dbPath, port)
-	}()
+	_ = os.WriteFile(filepath.Join(categoryPath, fmt.Sprintf("luffy-chunk%09d", 1)), []byte("12345\n"), 0666)
 
 	etcdArgs := []string{
 		"--data-dir", etcdPath,
@@ -89,24 +84,15 @@ func simpleClientAndServerTest(t *testing.T, concurrent bool) {
 		}
 	})
 
-	log.Default().Printf("starting server on port %d", port)
-	// wait for server to start
-	for i := 0; i <= 100; i++ {
-		select {
-		case err := <-errChan:
-			t.Fatalf("error while starting server %v", err)
-		default:
+	log.Default().Printf("waiting etcd on port %d", etcdPort)
+	waitForPort(t, etcdPort, make(chan error, 1))
 
-		}
-		timeout := time.Millisecond * 50
-		conn, err := net.DialTimeout("tcp", net.JoinHostPort("localhost", fmt.Sprint(port)), timeout)
-		if err != nil {
-			time.Sleep(timeout)
-			continue
-		}
-		_ = conn.Close()
-		break
-	}
+	log.Default().Printf("starting server on port %d", port)
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- InitAndServer(fmt.Sprintf("http://localhost:%d", etcdPort), dbPath, "luffy", fmt.Sprintf("localhost:%d", port))
+	}()
+	waitForPort(t, port, make(chan error, 1))
 	log.Default().Printf("testing started")
 	c := client.NewClient(fmt.Sprintf("http://localhost:%d", port))
 	var want, got int64
@@ -129,6 +115,26 @@ func simpleClientAndServerTest(t *testing.T, concurrent bool) {
 		t.Errorf("the expected sum %d is not equal to the received sum %d delivered %1.f%%", want, got, float64(got)/float64(want)*100)
 	}
 	log.Default().Printf("Success %d %d", want, got)
+}
+
+func waitForPort(t *testing.T, port int, errCh chan error) {
+	t.Helper()
+	for i := 0; i <= 100; i++ {
+		select {
+		case err := <-errCh:
+			t.Fatalf("error while starting server %v", err)
+		default:
+
+		}
+		timeout := time.Millisecond * 50
+		conn, err := net.DialTimeout("tcp", net.JoinHostPort("localhost", fmt.Sprint(port)), timeout)
+		if err != nil {
+			time.Sleep(timeout)
+			continue
+		}
+		_ = conn.Close()
+		break
+	}
 }
 
 func sendAndReceiveConcurrently(c *client.Client) (want, got int64, err error) {

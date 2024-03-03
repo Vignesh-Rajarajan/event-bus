@@ -2,6 +2,7 @@ package manager
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,8 +10,8 @@ import (
 
 func TestInitialiseOnDisk(t *testing.T) {
 	dir := getTempDir(t)
-	testCreateFile(t, filepath.Join(dir, "chunk1"))
-	testCreateFile(t, filepath.Join(dir, "chunk10"))
+	testCreateFile(t, filepath.Join(dir, "luffy-chunk1"))
+	testCreateFile(t, filepath.Join(dir, "luffy-chunk10"))
 
 	onDisk := testNewOnDisk(t, dir)
 
@@ -23,7 +24,7 @@ func TestInitialiseOnDisk(t *testing.T) {
 
 func TestFileDescriptor(t *testing.T) {
 	dir := getTempDir(t)
-	testCreateFile(t, filepath.Join(dir, "chunk1"))
+	testCreateFile(t, filepath.Join(dir, "luffy-chunk1"))
 
 	onDisk := testNewOnDisk(t, dir)
 
@@ -35,25 +36,25 @@ func TestFileDescriptor(t *testing.T) {
 	}{
 		{
 			desc:     "Read from already existing file should not return error",
-			fileName: "chunk1",
+			fileName: "luffy-chunk1",
 			write:    false,
 			wantErr:  false,
 		},
 		{
 			desc:     "Should not overwrite existing file",
-			fileName: "chunk1",
+			fileName: "luffy-chunk1",
 			write:    true,
 			wantErr:  true,
 		},
 		{
 			desc:     "Should not read from non existing file",
-			fileName: "chunk2",
+			fileName: "luffy-chunk2",
 			write:    false,
 			wantErr:  true,
 		},
 		{
 			desc:     "Should not create files that do not exist",
-			fileName: "chunk2",
+			fileName: "luffy-chunk2",
 			write:    true,
 			wantErr:  false,
 		},
@@ -77,7 +78,7 @@ func TestReadAndWriteOnDisk(t *testing.T) {
 
 	want := "one\ntwo\nthree\nfour\nfive\n"
 
-	if err := onDisk.Write([]byte(want)); err != nil {
+	if err := onDisk.Write(context.Background(), []byte(want)); err != nil {
 		t.Fatalf("error while writing %v", err)
 	}
 
@@ -111,7 +112,7 @@ func TestAckLastChunk(t *testing.T) {
 
 	want := "one\ntwo\nthree\nfour\nfive\n"
 
-	if err := onDisk.Write([]byte(want)); err != nil {
+	if err := onDisk.Write(context.Background(), []byte(want)); err != nil {
 		t.Fatalf("error while writing %v", err)
 	}
 
@@ -128,9 +129,15 @@ func TestAckLastChunk(t *testing.T) {
 	}
 }
 
+type nilHook struct{}
+
+func (n *nilHook) Init(ctx context.Context, category, fileName string) error {
+	return nil
+}
+
 func testNewOnDisk(t *testing.T, dir string) *EventBusOnDisk {
 	t.Helper()
-	onDisk, err := NewEventBusOnDisk(dir)
+	onDisk, err := NewEventBusOnDisk(dir, "test", "luffy", &nilHook{})
 	if err != nil {
 		t.Fatalf("error while creating on disk %v", err)
 	}

@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"context"
 	"fmt"
 	"github.com/Vignesh-Rajarajan/event-bus/chunk"
 	"io"
@@ -21,7 +22,7 @@ type EventBusInMemory struct {
 var _ EventManager = (*EventBusInMemory)(nil)
 
 // Write writes the message to the last chunk
-func (c *EventBusInMemory) Write(msg []byte) error {
+func (c *EventBusInMemory) Write(ctx context.Context, msg []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
