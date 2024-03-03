@@ -6,7 +6,6 @@ import (
 	"github.com/Vignesh-Rajarajan/event-bus/manager"
 	"github.com/Vignesh-Rajarajan/event-bus/replication"
 	"github.com/valyala/fasthttp"
-	clientv3 "go.etcd.io/etcd/client/v3"
 	"log"
 	"os"
 	"path/filepath"
@@ -15,22 +14,22 @@ import (
 )
 
 type Server struct {
-	etcd               *clientv3.Client
 	instanceName       string
 	dirname            string
 	listenAddr         string
 	replicationStorage *replication.Storage
+	replicationClient  *replication.Client
 	m                  sync.Mutex
 	storages           map[string]manager.EventManager
 	logger             *log.Logger
 }
 
-func NewServer(etcd *clientv3.Client, instanceName, dirname, listenerAddr string, replicationStorage *replication.Storage) *Server {
+func NewServer(replicationClient *replication.Client, instanceName, dirname, listenerAddr string, replicationStorage *replication.Storage) *Server {
 	return &Server{
-		etcd:               etcd,
 		dirname:            dirname,
 		instanceName:       instanceName,
 		listenAddr:         listenerAddr,
+		replicationClient:  replicationClient,
 		logger:             log.Default(),
 		storages:           make(map[string]manager.EventManager),
 		replicationStorage: replicationStorage,

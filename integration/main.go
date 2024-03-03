@@ -5,46 +5,46 @@ import (
 	"fmt"
 	"github.com/Vignesh-Rajarajan/event-bus/replication"
 	"github.com/Vignesh-Rajarajan/event-bus/web"
-	clientv3 "go.etcd.io/etcd/client/v3"
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
-func InitAndServer(etcdAddr, dirname, instance, listenerAddr string) error {
+type InitArgs struct {
+	EtcdAddr     []string
+	Dirname      string
+	Instance     string
+	ListenerAddr string
+	ClusterName  string
+}
 
+func InitAndServer(args InitArgs) error {
+
+	etcdCli, err := replication.NewClient(args.EtcdAddr, args.ClusterName)
+	if err != nil {
+		return fmt.Errorf("error creating etcd client %v", err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	cfg := clientv3.Config{
-		Endpoints:   strings.Split(etcdAddr, ","),
-		DialTimeout: 5 * time.Second,
+	if err := etcdCli.RegisterPeer(ctx, replication.Peer{
+		Addr: args.ListenerAddr,
+		Name: args.Instance,
+	}); err != nil {
+		return fmt.Errorf("error registering peer %v", err)
 	}
-	etcdClient, err := clientv3.New(cfg)
-	if err != nil {
-		log.Fatalf("error creating etcd client %v", err)
-	}
-	defer etcdClient.Close()
-	_, err = etcdClient.Put(ctx, "test", "test")
-	if err != nil {
-		return fmt.Errorf("error putting key in etcd %w", err)
-	}
-	_, err = etcdClient.Put(ctx, "peers/"+instance, listenerAddr)
-	if err != nil {
-		return fmt.Errorf("couldn't register peer address in etcd %w", err)
-	}
-	fileName := filepath.Join(dirname, "events")
+
+	fileName := filepath.Join(args.Dirname, "events")
 	fp, err := os.OpenFile(fileName, os.O_CREATE|os.O_RDWR, 0666)
 	if err != nil {
-		log.Fatalf("error creating a test in provided directory %s file %v", dirname, err)
+		log.Fatalf("error creating a test in provided directory %s file %v", args.Dirname, err)
 	}
 	_ = fp.Close()
 	_ = os.Remove(fp.Name())
 
-	s := web.NewServer(etcdClient, instance, dirname, listenerAddr, replication.NewStorage(etcdClient, instance))
+	s := web.NewServer(etcdCli, args.Instance, args.Dirname, args.ListenerAddr, replication.NewStorage(etcdCli, args.Instance))
 
-	log.Default().Println("Starting server on addr ", listenerAddr, " dirname ", dirname, " ...", "etcd ", etcdAddr)
+	log.Default().Println("Starting server on addr ", args.ListenerAddr, " dirname ", args.Dirname, " ...", "etcd ", args.EtcdAddr)
 	return s.Start()
 }
